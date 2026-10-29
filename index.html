@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Hidroponik MQTT</title>
+  
+  <!-- Library Pendukung -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+
+  <style>
+    /* Konfigurasi Warna Utama Neumorphism */
+    body {
+      background-color: #e0e5ec;
+      color: #4a5568;
+    }
+    
+    /* Efek Timbul (Soft UI) */
+    .neu-card {
+      background: #e0e5ec;
+      box-shadow: 9px 9px 16px rgb(163,177,198,0.6), -9px -9px 16px rgba(255,255,255, 0.5);
+      border-radius: 1.5rem;
+    }
+    
+    /* Efek Tenggelam (Inset) */
+    .neu-inset {
+      background: #e0e5ec;
+      box-shadow: inset 6px 6px 10px 0 rgba(163, 177, 198, 0.7), inset -6px -6px 10px 0 rgba(255, 255, 255, 0.8);
+      border-radius: 1rem;
+    }
+
+    /* Efek Tombol Tekan */
+    .neu-btn {
+      background: #e0e5ec;
+      box-shadow: 6px 6px 12px rgb(163,177,198,0.6), -6px -6px 12px rgba(255,255,255, 0.5);
+      transition: all 0.2s ease-in-out;
+    }
+    .neu-btn:active, .neu-btn.active {
+      box-shadow: inset 6px 6px 10px 0 rgba(163, 177, 198, 0.7), inset -6px -6px 10px 0 rgba(255, 255, 255, 0.8);
+      color: #3182ce;
+    }
+  </style>
+</head>
+<body class="min-h-screen p-6 font-sans antialiased">
+
+  <div class="max-w-7xl mx-auto space-y-8">
+    
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row justify-between items-center neu-card p-6">
+      <div>
+        <h1 class="text-3xl font-bold text-slate-700 tracking-wide">Telemetry Hidroponik</h1>
+        <p class="text-sm text-slate-500 mt-1">Status Koneksi: <span id="mqtt-status" class="font-semibold text-red-500">Disconnected</span></p>
+      </div>
+      
+      <!-- Kontrol Pompa -->
+      <div class="mt-4 md:mt-0 flex items-center space-x-4 neu-inset p-3">
+        <span class="font-semibold text-slate-600">Sirkulasi Pompa</span>
+        <button id="btn-pompa" class="neu-btn px-8 py-3 rounded-full font-bold text-slate-500" onclick="togglePompa()">
+          OFF
+        </button>
+      </div>
+    </div>
+
+    <!-- Grid Indikator Gauge -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      
+      <!-- Card Suhu -->
+      <div class="neu-card p-6 flex flex-col items-center">
+        <h2 class="text-lg font-semibold text-slate-600 mb-2">Suhu Air</h2>
+        <div id="chart-suhu" class="w-full h-64"></div>
+      </div>
+      
+      <!-- Card TDS -->
+      <div class="neu-card p-6 flex flex-col items-center">
+        <h2 class="text-lg font-semibold text-slate-600 mb-2">Nutrisi (TDS)</h2>
+        <div id="chart-tds" class="w-full h-64"></div>
+      </div>
+      
+      <!-- Card pH -->
+      <div class="neu-card p-6 flex flex-col items-center">
+        <h2 class="text-lg font-semibold text-slate-600 mb-2">Tingkat pH</h2>
+        <div id="chart-ph" class="w-full h-64"></div>
+      </div>
+
+    </div>
+
+    <!-- Grid Data History & Water Level -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      
+      <!-- Chart Line History (Mengambil 2 Kolom) -->
+      <div class="neu-card p-6 lg:col-span-2">
+        <h2 class="text-lg font-semibold text-slate-600 mb-4">Tren Data Sensor (Real-time)</h2>
+        <div id="chart-history" class="w-full h-72"></div>
+      </div>
+
+      <!-- Level Air Numerik -->
+      <div class="neu-card p-6 flex flex-col items-center justify-center">
+        <h2 class="text-lg font-semibold text-slate-600 mb-4">Water Level Tandon</h2>
+        <div class="neu-inset w-40 h-40 rounded-full flex items-center justify-center border-4 border-[#e0e5ec]">
+          <span id="txt-waterlevel" class="text-4xl font-bold text-blue-500">0%</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // --- 1. Inisialisasi ECharts ---
+    const gaugeOpts = (name, maxVal, color) => ({
+      series: [{
+        type: 'gauge',
+        max: maxVal,
+        progress: { show: true, width: 12, itemStyle: { color: color } },
+        axisLine: { lineStyle: { width: 12, color: [[1, '#cbd5e1']] } },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { show: false },
+        pointer: { width: 5, itemStyle: { color: '#64748b' } },
+        detail: { valueAnimation: true, fontSize: 30, color: color, offsetCenter: [0, '60%'] },
+        data: [{ value: 0 }]
+      }]
+    });
+
+    const chartSuhu = echarts.init(document.getElementById('chart-suhu'));
+    chartSuhu.setOption(gaugeOpts('Suhu', 50, '#ef4444')); // Merah
+
+    const chartTds = echarts.init(document.getElementById('chart-tds'));
+    chartTds.setOption(gaugeOpts('TDS', 2000, '#eab308')); // Kuning
+
+    const chartPh = echarts.init(document.getElementById('chart-ph'));
+    chartPh.setOption(gaugeOpts('pH', 14, '#10b981')); // Hijau
+
+    const chartHistory = echarts.init(document.getElementById('chart-history'));
+    let timeData = [];
+    let suhuData = [];
+    let tdsData = [];
+    
+    chartHistory.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['Suhu (°C)', 'TDS (ppm) بھی'], textStyle: { color: '#64748b' } },
+      xAxis: { type: 'category', data: timeData, splitLine: { show: false } },
+      yAxis: [{ type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#cbd5e1' } } }],
+      series: [
+        { name: 'Suhu (°C)', type: 'line', smooth: true, data: suhuData, itemStyle: { color: '#ef4444' } },
+        { name: 'TDS (ppm)', type: 'line', smooth: true, data: tdsData, itemStyle: { color: '#eab308' } }
+      ]
+    });
+
+    // --- 2. Konfigurasi MQTT.js via WebSocket ---
+    const clientId = 'web_client_' + Math.random().toString(16).substring(2, 8);
+    const mqttBroker = 'wss://broker.emqx.io:8084/mqtt'; // Port WebSocket Secure
+    
+    const client = mqtt.connect(mqttBroker, { clientId: clientId });
+
+    client.on('connect', () => {
+      document.getElementById('mqtt-status').innerText = "Connected";
+      document.getElementById('mqtt-status').className = "font-semibold text-green-500";
+      
+      // Subscribe ke topik sensor dan pompa
+      client.subscribe('hidroponik/sensor');
+      client.subscribe('hidroponik/pompa');
+    });
+
+    client.on('message', (topic, message) => {
+      const payload = message.toString();
+      
+      if (topic === 'hidroponik/sensor') {
+        try {
+          // Format ekspektasi JSON: {"suhu": 28.5, "tds": 850, "ph": 6.5, "waterLevel": 80}
+          const data = JSON.parse(payload);
+          
+          // Update Gauge ECharts
+          chartSuhu.setOption({ series: [{ data: [{ value: data.suhu, name: '°C' }] }] });
+          chartTds.setOption({ series: [{ data: [{ value: data.tds, name: 'ppm' }] }] });
+          chartPh.setOption({ series: [{ data: [{ value: data.ph, name: 'pH' }] }] });
+          
+          // Update Text Water Level
+          document.getElementById('txt-waterlevel').innerText = data.waterLevel + '%';
+
+          // Update Line Chart History (Maksimal 10 titik terakhir)
+          const now = new Date();
+          const timeString = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
+          
+          if(timeData.length > 10) { timeData.shift(); suhuData.shift(); tdsData.shift(); }
+          timeData.push(timeString);
+          suhuData.push(data.suhu);
+          tdsData.push(data.tds);
+          
+          chartHistory.setOption({ xAxis: { data: timeData }, series: [{ data: suhuData }, { data: tdsData }] });
+
+        } catch (e) { console.error("Error parsing JSON", e); }
+      }
+
+      if (topic === 'hidroponik/pompa') {
+        const btn = document.getElementById('btn-pompa');
+        if (payload === 'ON') {
+          btn.innerText = 'ON';
+          btn.classList.add('active');
+        } else {
+          btn.innerText = 'OFF';
+          btn.classList.remove('active');
+        }
+      }
+    });
+
+    // --- 3. Logika Kontrol Pompa ---
+    window.togglePompa = function() {
+      const btn = document.getElementById('btn-pompa');
+      const isCurrentlyOn = btn.classList.contains('active');
+      const command = isCurrentlyOn ? 'OFF' : 'ON';
+      
+      // Publish perintah ke ESP32
+      client.publish('hidroponik/pompa', command, { retain: true });
+    };
+
+    // Auto-resize chart jika window berubah ukuran
+    window.addEventListener('resize', () => {
+      chartSuhu.resize(); chartTds.resize(); chartPh.resize(); chartHistory.resize();
+    });
+  </script>
+</body>
+</html>
